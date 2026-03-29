@@ -1,4 +1,4 @@
-# CTF Write-Up: Create Edge — Orbitronix Systems
+# Orbitronix Systems
 
 **Author:** Neelesh Pandey  
 **Platform:** Hackviser  

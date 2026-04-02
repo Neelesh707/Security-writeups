@@ -7,6 +7,7 @@ and key takeaways.
 | # | Lab | Topic |
 |---|-----|-------|
 | 1 | Race Condition File Upload Bypass |  File Upload |
+| 2 | Partial Construction Race Conditions |  Race Condition |
 
 > Expert labs require chaining multiple vulnerabilities — 
 > methodology and problem-solving approach documented in full.

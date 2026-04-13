@@ -221,7 +221,6 @@ def generate_remember_token(user_id):
 
 | Tool | Purpose |
 |------|---------|
-| Burp Suite Professional | Proxy, cookie inspection via Inspector |
 | Burp Intruder | Automated cookie generation with payload processing |
 | Burp Payload Processing | MD5 hash → prefix → Base64 encode pipeline |
 

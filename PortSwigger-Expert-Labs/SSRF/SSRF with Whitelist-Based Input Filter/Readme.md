@@ -173,4 +173,4 @@ Client sees: fragment=@stock.weliketoshop.net/...  |  host=localhost:80  → HIT
 
 ---
 
-*Writeup by [your handle] | PortSwigger Web Security Academy*
+*Writeup by Neelesh Pandey | PortSwigger Web Security Academy*

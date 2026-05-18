@@ -185,4 +185,4 @@ The `stockApi` filter sees a relative path pointing to the local app and approve
 
 ---
 
-*Writeup by [your handle] | PortSwigger Web Security Academy*
+*Writeup by Neelesh Pandey | PortSwigger Web Security Academy*

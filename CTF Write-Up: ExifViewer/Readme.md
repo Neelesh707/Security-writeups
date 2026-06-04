@@ -1,4 +1,4 @@
-# CTF Write-Up: ExifViewer — CVE-2021-22204 RCE
+# ExifViewer — CVE-2021-22204 RCE
 
 **Author:** Neelesh Pandey  
 **Platform:** Hackviser  

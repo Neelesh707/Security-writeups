@@ -1,4 +1,4 @@
-# ExifViewer — CVE-2021-22204 RCE
+# CVE-2021-22204 RCE - ExifViewer
 
 **Author:** Neelesh Pandey  
 **Platform:** Hackviser  
